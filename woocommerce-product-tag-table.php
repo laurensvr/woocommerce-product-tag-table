@@ -12,11 +12,12 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-// Shortcode: [product_tag_table tag="wijn" columns="name,price,region,stock"]
+// Shortcode: [product_tag_table tag="wijn" columns="name,price,region,country,stock"]
 add_shortcode( 'product_tag_table', 'wptt_render_product_tag_table' );
 
 add_action( 'admin_init', 'wptt_register_settings' );
 add_action( 'admin_menu', 'wptt_add_settings_page' );
+add_action( 'wp_enqueue_scripts', 'wptt_enqueue_assets' );
 
 /**
  * Return the plugin's default settings.
@@ -25,7 +26,7 @@ add_action( 'admin_menu', 'wptt_add_settings_page' );
  */
 function wptt_get_default_settings() {
     return array(
-        'columns'    => array( 'name', 'price', 'region', 'stock' ),
+        'columns'    => array( 'name', 'price', 'region', 'country', 'stock' ),
         'taxonomies' => array(
             array(
                 'slug'  => 'region',
@@ -211,7 +212,7 @@ function wptt_parse_key_label_lines( $raw, $key_name ) {
  * @return array
  */
 function wptt_get_all_column_keys_from_settings( $settings ) {
-    $base = array( 'name', 'price', 'stock' );
+    $base = array( 'name', 'price', 'stock', 'product_cat' );
 
     $taxonomies = array();
     if ( ! empty( $settings['taxonomies'] ) ) {
@@ -357,6 +358,11 @@ function wptt_get_column_definitions_from_settings( $settings ) {
             'label' => 'Voorraad',
             'type'  => 'builtin',
         ),
+        'product_cat' => array(
+            'label'    => __( 'Hoofd categorie', 'woocommerce-product-tag-table' ),
+            'type'     => 'product_cat',
+            'taxonomy' => 'product_cat',
+        ),
     );
 
     if ( ! empty( $settings['taxonomies'] ) ) {
@@ -445,6 +451,8 @@ function wptt_render_product_tag_table( $atts ) {
     $args = array(
         'post_type'      => 'product',
         'posts_per_page' => -1,
+        'orderby'        => 'title',
+        'order'          => 'ASC',
         'tax_query'      => array(
             array(
                 'taxonomy' => 'product_tag',
@@ -482,13 +490,13 @@ function wptt_render_product_tag_table( $atts ) {
             printf( '<h3 class="woocommerce-product-tag-table-group">%s</h3>', esc_html( $group['label'] ) );
         }
         ?>
-        <table class="woocommerce-product-tag-table" style="width:100%; border-collapse: collapse;">
+        <table class="woocommerce-product-tag-table">
             <thead>
-                <tr style="border-bottom: 2px solid #ccc;">
+                <tr>
                     <?php foreach ( $columns as $column ) :
                         if ( isset( $column_definitions[ $column ] ) ) :
                             ?>
-                            <th style="text-align:left; padding:8px;">
+                            <th>
                                 <?php echo esc_html( $column_definitions[ $column ]['label'] ); ?>
                             </th>
                             <?php
@@ -498,7 +506,7 @@ function wptt_render_product_tag_table( $atts ) {
             </thead>
             <tbody>
             <?php foreach ( $group['products'] as $product ) : ?>
-                <tr style="border-bottom: 1px solid #eee;">
+                <tr>
                     <?php foreach ( $columns as $column ) :
                         if ( ! isset( $column_definitions[ $column ] ) ) {
                             continue;
@@ -506,7 +514,7 @@ function wptt_render_product_tag_table( $atts ) {
 
                         $cell_value = wptt_get_column_value( $column, $product, $atts, $column_definitions );
                         ?>
-                        <td style="padding:8px;">
+                        <td>
                             <?php
                             if ( 'name' === $column ) {
                                 ?>
@@ -641,6 +649,24 @@ function wptt_get_product_group_keys( $product, $column_key, $definition, $colum
                 ),
             );
 
+        case 'product_cat':
+            $terms = wptt_get_primary_product_categories( $product );
+
+            if ( empty( $terms ) ) {
+                return array();
+            }
+
+            $keys = array();
+
+            foreach ( $terms as $term ) {
+                $keys[] = array(
+                    'key'   => $term->slug,
+                    'label' => $term->name,
+                );
+            }
+
+            return $keys;
+
         case 'builtin':
         default:
             $value = wptt_get_column_value( $column_key, $product, $atts, $column_definitions );
@@ -729,6 +755,15 @@ function wptt_get_column_value( $column, $product, $atts, $column_definitions ) 
 
             return $value !== '' ? $value : '–';
 
+        case 'product_cat':
+            $terms = wptt_get_primary_product_categories( $product );
+
+            if ( empty( $terms ) ) {
+                return '–';
+            }
+
+            return implode( ', ', wp_list_pluck( $terms, 'name' ) );
+
         case 'builtin':
         default:
             switch ( $column ) {
@@ -763,6 +798,73 @@ function wptt_get_taxonomy_terms_list( $product_id, $taxonomy ) {
     $names = wp_list_pluck( $terms, 'name' );
 
     return implode( ', ', $names );
+}
+
+/**
+ * Retrieve the primary product categories for a product.
+ *
+ * The function will return the top-most parent categories for any assigned
+ * product categories so grouping mirrors a "main" category structure.
+ *
+ * @param WC_Product $product Product instance.
+ *
+ * @return array Array of WP_Term objects.
+ */
+function wptt_get_primary_product_categories( $product ) {
+    $terms = wc_get_product_terms(
+        $product->get_id(),
+        'product_cat',
+        array(
+            'orderby' => 'parent',
+            'order'   => 'ASC',
+        )
+    );
+
+    if ( empty( $terms ) ) {
+        return array();
+    }
+
+    $primary_terms = array();
+
+    foreach ( $terms as $term ) {
+        $top_term = $term;
+
+        while ( $top_term->parent ) {
+            $parent = get_term( $top_term->parent, 'product_cat' );
+
+            if ( ! $parent || is_wp_error( $parent ) ) {
+                break;
+            }
+
+            $top_term = $parent;
+        }
+
+        $primary_terms[ $top_term->term_id ] = $top_term;
+    }
+
+    return array_values( $primary_terms );
+}
+
+/**
+ * Register the frontend styles for the product tag table output.
+ *
+ * @return void
+ */
+function wptt_enqueue_assets() {
+    $handle = 'wptt-frontend';
+
+    wp_register_style( $handle, false, array(), '1.0.0' );
+
+    wp_enqueue_style( $handle );
+
+    $css = '.woocommerce-product-tag-table{width:100%;border-collapse:collapse;table-layout:auto;}'
+        . '.woocommerce-product-tag-table thead tr{border-bottom:2px solid #ccc;}'
+        . '.woocommerce-product-tag-table th,'
+        . '.woocommerce-product-tag-table td{padding:0.75rem;text-align:left;vertical-align:top;}'
+        . '.woocommerce-product-tag-table tbody tr{border-bottom:1px solid #eee;}'
+        . '.woocommerce-product-tag-table-group{margin-top:2rem;margin-bottom:0.75rem;}';
+
+    wp_add_inline_style( $handle, $css );
 }
 
 /**
