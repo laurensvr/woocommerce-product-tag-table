@@ -1,0 +1,57 @@
+version: '3.9'
+
+services:
+  db:
+    image: mariadb:10.11
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: wordpress
+      MARIADB_USER: wordpress
+      MARIADB_PASSWORD: wordpress
+      MARIADB_ROOT_PASSWORD: wordpress
+    volumes:
+      - db_data:/var/lib/mysql
+
+  wordpress:
+    image: wordpress:6.5.4-php8.2-apache
+    depends_on:
+      - db
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_CONFIG_EXTRA: |
+        define( 'WP_HOME', getenv_docker('WORDPRESS_HOME', 'http://localhost:8080') );
+        define( 'WP_SITEURL', getenv_docker('WORDPRESS_SITEURL', 'http://localhost:8080') );
+    volumes:
+      - wordpress_data:/var/www/html
+      - ./woocommerce-product-tag-table.php:/var/www/html/wp-content/plugins/woocommerce-product-tag-table/woocommerce-product-tag-table.php
+      - ./docker/mu-plugins:/var/www/html/wp-content/mu-plugins
+
+  cli:
+    image: wordpress:cli-php8.2
+    depends_on:
+      - db
+      - wordpress
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_HOME: http://localhost:8080
+      WORDPRESS_SITEURL: http://localhost:8080
+    user: "33:33"
+    working_dir: /var/www/html
+    volumes:
+      - wordpress_data:/var/www/html
+      - ./woocommerce-product-tag-table.php:/var/www/html/wp-content/plugins/woocommerce-product-tag-table/woocommerce-product-tag-table.php
+      - ./docker/mu-plugins:/var/www/html/wp-content/mu-plugins
+      - ./docker/mock-data.php:/var/www/html/mock-data.php
+
+volumes:
+  db_data:
+  wordpress_data:
